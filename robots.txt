@@ -1,0 +1,4 @@
+# This site exists only to serve the OAuth callback and the legal pages for
+# QBO Report Puller, an internal tool. It is not intended for search results.
+User-agent: *
+Disallow: /

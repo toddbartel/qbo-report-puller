@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Connecting to QBO Report Puller</title>
+<style>
+  :root { --navy:#1F497D; --light:#EEF3FB; --ink:#1a1a2e; --ok:#12805c; --bad:#c00000; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--light); color:var(--ink);
+         font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif; padding:24px; }
+  .card { background:#fff; border-radius:10px; box-shadow:0 2px 16px rgba(31,73,125,.14);
+          max-width:560px; width:100%; padding:32px 36px; }
+  h1 { font-size:1.25rem; margin:0 0 4px; color:var(--navy); }
+  p  { line-height:1.55; margin:12px 0; }
+  .muted { color:#5a6478; font-size:.9rem; }
+  .spinner { width:34px; height:34px; border:3px solid #dbe4f2; border-top-color:var(--navy);
+             border-radius:50%; animation:spin .9s linear infinite; margin:0 0 18px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .hidden { display:none; }
+  .ok h1  { color:var(--ok); }
+  .bad h1 { color:var(--bad); }
+  code { display:block; background:#f4f7fc; border:1px solid #dbe4f2; border-radius:6px;
+         padding:12px; font-size:.82rem; word-break:break-all; user-select:all; margin:10px 0; }
+  button { background:var(--navy); color:#fff; border:0; border-radius:6px; padding:9px 18px;
+           font-size:.92rem; font-weight:600; cursor:pointer; font-family:inherit; }
+  button:hover { background:#17395f; }
+  a { color:var(--navy); }
+  ol { line-height:1.7; padding-left:20px; }
+</style>
+</head>
+<body>
+<div class="card">
+
+  <div id="working">
+    <div class="spinner"></div>
+    <h1>Connecting to QBO Report Puller&hellip;</h1>
+    <p class="muted">Handing your QuickBooks authorization back to the app.
+       This usually takes a second.</p>
+  </div>
+
+  <div id="success" class="hidden ok">
+    <h1>&#10003; Authorization successful</h1>
+    <p>You can close this tab and return to <strong>QBO Report Puller</strong>.</p>
+  </div>
+
+  <div id="denied" class="hidden bad">
+    <h1>Authorization cancelled</h1>
+    <p>QuickBooks reported: <strong id="denied-reason"></strong></p>
+    <p>Close this tab and try connecting again from the app.</p>
+  </div>
+
+  <div id="manual" class="hidden">
+    <h1>Almost there &mdash; one manual step</h1>
+    <p>The app is running but this page couldn't reach it directly. That is
+       usually a firewall or antivirus blocking local connections.</p>
+    <ol>
+      <li>Copy the line below.</li>
+      <li>Switch to <strong>QBO Report Puller</strong>.</li>
+      <li>Click <strong>Paste code manually</strong> and paste it in.</li>
+    </ol>
+    <code id="payload"></code>
+    <button id="copy">Copy to clipboard</button>
+    <button id="retry" style="background:#5a6478">Try again</button>
+    <p class="muted" style="margin-top:18px">
+      Or <a id="direct" href="#">open the local link directly</a>.
+    </p>
+  </div>
+
+  <div id="bare" class="hidden">
+    <h1>Nothing to do here</h1>
+    <p>This page only does something during the QuickBooks connection process.
+       Start from <strong>QBO Report Puller</strong> on your computer.</p>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // Must match CALLBACK_PORTS in auth.py.
+  var PORTS = [8085, 8086, 8087];
+
+  var qs     = window.location.search;
+  var params = new URLSearchParams(qs);
+  var code   = params.get("code");
+  var realm  = params.get("realmId");
+  var err    = params.get("error");
+
+  function show(id) {
+    ["working", "success", "denied", "manual", "bare"].forEach(function (s) {
+      document.getElementById(s).classList.toggle("hidden", s !== id);
+    });
+  }
+
+  if (err) {
+    document.getElementById("denied-reason").textContent =
+      params.get("error_description") || err;
+    show("denied");
+    return;
+  }
+
+  if (!code || !realm) { show("bare"); return; }
+
+  var payload = "code=" + encodeURIComponent(code) +
+                "&realmId=" + encodeURIComponent(realm);
+  document.getElementById("payload").textContent = payload;
+  document.getElementById("direct").href = "http://127.0.0.1:" + PORTS[0] + "/callback" + qs;
+
+  // Relay to whichever local port the app managed to bind.
+  // http://127.0.0.1 counts as a trustworthy origin, so this is not blocked
+  // as mixed content; auth.py sends the CORS + Private Network Access headers.
+  function relay() {
+    show("working");
+    var chain = Promise.reject();
+    PORTS.forEach(function (port) {
+      chain = chain.catch(function () {
+        return fetch("http://127.0.0.1:" + port + "/callback" + qs, {
+          mode: "cors", cache: "no-store"
+        }).then(function (r) {
+          if (!r.ok) { throw new Error("bad status"); }
+          return r.json();
+        }).then(function (j) {
+          if (!j || j.ok !== true) { throw new Error(j && j.error || "refused"); }
+          return true;
+        });
+      });
+    });
+    chain.then(function () { show("success"); })
+         .catch(function () { show("manual"); });
+  }
+
+  document.getElementById("copy").addEventListener("click", function () {
+    var btn = this;
+    navigator.clipboard.writeText(payload).then(function () {
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = "Copy to clipboard"; }, 1800);
+    }).catch(function () {
+      var r = document.createRange();
+      r.selectNode(document.getElementById("payload"));
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(r);
+    });
+  });
+
+  document.getElementById("retry").addEventListener("click", relay);
+
+  relay();
+})();
+</script>
+</body>
+</html>
